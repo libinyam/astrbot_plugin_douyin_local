@@ -25,12 +25,10 @@ AWEME_ID_PATTERNS = [
     re.compile(r"['\"](?:aweme_id|awemeId|item_id|itemId)['\"]\s*:\s*['\"]?(\d{15,25})", re.IGNORECASE),
 ]
 
-# 纯 ID 匹配（18~20 位数字）
 RAW_ID_RE = re.compile(r"(?<!\d)(\d{18,20})(?!\d)")
 
 TRAILING_URL_CHARS = " \t\r\n\"'<>)]}，。！？、；;,.!?"
 
-# 移动端 UA
 IOS_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) "
@@ -97,7 +95,6 @@ class ParsedDouyinItem:
 # ---------------------------------------------------------------------------
 
 def extract_douyin_url(text: str) -> str | None:
-    """从任意消息文本中提取第一个抖音链接。"""
     if not text:
         return None
     match = DOUYIN_URL_RE.search(text)
@@ -110,7 +107,6 @@ def extract_douyin_url(text: str) -> str | None:
 
 
 def extract_aweme_id(text: str) -> str | None:
-    """从 URL、HTML 片段或 JSON 字符串中提取抖音作品 ID。"""
     if not text:
         return None
     decoded = html.unescape(unquote(text))
@@ -149,15 +145,12 @@ class DouyinParser:
             follow_redirects=True,
             timeout=httpx.Timeout(self.timeout),
         ) as client:
-            # 1) 注册匿名 ttwid（含 redirect_url callback）
             await self._ensure_ttwid(client)
 
-            # 2) 从短链/URL 中提取 item_id
             item_id = await self._resolve_item_id(client, source_url)
             if not item_id:
                 raise DouyinParseError("无法从链接中提取作品 ID")
 
-            # 3) 尝试解析视频分享页
             try:
                 item = await self._parse_share_page(client, item_id, source_url)
                 if item:
@@ -167,7 +160,6 @@ class DouyinParser:
             except Exception as exc:  # noqa: BLE001
                 raise DouyinParseError(f"解析分享页失败: {exc}") from exc
 
-            # 4) 尝试图集接口
             try:
                 item = await self._parse_slides(client, item_id, source_url)
                 if item:
@@ -187,7 +179,6 @@ class DouyinParser:
         if self._cookies.get("ttwid"):
             return
 
-        # 尝试从用户传入的 cookie 中提取
         if self.cookie:
             for part in self.cookie.split(";"):
                 part = part.strip()
@@ -195,7 +186,6 @@ class DouyinParser:
                     self._cookies["ttwid"] = part[len("ttwid="):]
                     return
 
-        # 注册匿名 ttwid
         try:
             resp = await client.post(
                 TTWID_REGISTER_URL,
@@ -215,16 +205,13 @@ class DouyinParser:
                 follow_redirects=False,
             )
 
-            # 从 Set-Cookie 头提取所有 cookie
             self._update_cookies_from_response(resp)
 
-            # 检查响应体中的 redirect_url
             try:
                 body = resp.json()
                 if isinstance(body, dict):
                     redirect_url = body.get("redirect_url")
                     if redirect_url:
-                        # 跟随 redirect_url 获取额外 cookie
                         callback_headers = {
                             "User-Agent": IOS_UA,
                             "Referer": "https://www.iesdouyin.com/",
@@ -246,7 +233,6 @@ class DouyinParser:
             pass
 
     def _update_cookies_from_response(self, resp: httpx.Response) -> None:
-        """从响应的 Set-Cookie 头更新 cookie。"""
         for sc in resp.headers.get_list("set-cookie"):
             m = re.match(r"([^=]+)=([^;]+)", sc)
             if m:
@@ -255,7 +241,6 @@ class DouyinParser:
     def _build_cookie_header(self) -> str:
         parts = [f"{k}={v}" for k, v in self._cookies.items()]
         if self.cookie:
-            # 合并用户传入的额外 cookie
             for part in self.cookie.split(";"):
                 part = part.strip()
                 if part and not any(part.startswith(f"{k}=") for k in self._cookies):
@@ -265,13 +250,10 @@ class DouyinParser:
     # -- item_id 解析 -------------------------------------------------------
 
     async def _resolve_item_id(self, client: httpx.AsyncClient, url: str) -> str | None:
-        """从短链或完整 URL 中解析出 item_id。"""
-        # 先直接从 URL 中提取
         item_id = extract_aweme_id(url)
         if item_id:
             return item_id
 
-        # 短链重定向解析（不跟随重定向，拿 Location 头）
         headers = dict(SHARE_HEADERS)
         cookie = self._build_cookie_header()
         if cookie:
@@ -279,9 +261,7 @@ class DouyinParser:
 
         try:
             resp = await client.get(url, headers=headers, follow_redirects=False)
-            # 更新 cookie
             self._update_cookies_from_response(resp)
-
             location = resp.headers.get("location", "")
             if location:
                 item_id = extract_aweme_id(location)
@@ -290,7 +270,6 @@ class DouyinParser:
         except Exception:  # noqa: BLE001
             pass
 
-        # 跟随重定向后再试
         try:
             resp = await client.get(url, headers=headers, follow_redirects=True)
             item_id = extract_aweme_id(str(resp.url))
@@ -317,10 +296,7 @@ class DouyinParser:
         if cookie:
             headers["Cookie"] = cookie
 
-        # 不跟随重定向，直接解析页面
         resp = await client.get(share_url, headers=headers, follow_redirects=False)
-
-        # 更新 cookie
         self._update_cookies_from_response(resp)
 
         if resp.status_code != 200:
@@ -441,7 +417,6 @@ class DouyinParser:
 # ---------------------------------------------------------------------------
 
 def _extract_router_data(page_text: str) -> dict[str, Any] | None:
-    """从 iesdouyin 分享页 HTML 中提取 window._ROUTER_DATA 的 JSON。"""
     if not page_text:
         return None
 
@@ -453,12 +428,10 @@ def _extract_router_data(page_text: str) -> dict[str, Any] | None:
     if not match:
         return _extract_universal_data(page_text)
 
-    raw = match.group(1).strip()
-    return _try_parse_json(raw)
+    return _try_parse_json(match.group(1).strip())
 
 
 def _extract_universal_data(page_text: str) -> dict[str, Any] | None:
-    """尝试从 PC 端 __UNIVERSAL_DATA_FOR_REHYDRATION__ 提取数据。"""
     pattern = re.compile(
         r'<script[^>]+id=["\']__UNIVERSAL_DATA_FOR_REHYDRATION__["\'][^>]*>(.*?)</script>',
         re.IGNORECASE | re.DOTALL,
@@ -470,7 +443,6 @@ def _extract_universal_data(page_text: str) -> dict[str, Any] | None:
 
 
 def _try_parse_json(raw: str) -> dict[str, Any] | None:
-    """尝试多种方式解析 JSON 字符串。"""
     candidates = [
         raw,
         html.unescape(raw),
@@ -495,10 +467,6 @@ def _try_parse_json(raw: str) -> dict[str, Any] | None:
 
 
 def _find_item_in_router_data(loader_data: dict[str, Any], item_id: str) -> dict[str, Any] | None:
-    """在 loaderData 中查找作品数据。
-
-    iesdouyin 分享页的 key 格式为 "video_(id)/page" 或 "note_(id)/page"。
-    """
     for key in (f"video_({item_id})/page", f"note_({item_id})/page",
                 "video_(id)/page", "note_(id)/page"):
         page_data = loader_data.get(key)
@@ -526,7 +494,6 @@ def _find_item_in_router_data(loader_data: dict[str, Any], item_id: str) -> dict
 
 
 def _extract_item_from_page_data(page_data: dict[str, Any]) -> dict[str, Any] | None:
-    """从 loaderData 的单个 page 数据中提取 aweme item。"""
     video_info = page_data.get("videoInfoRes") or page_data.get("video_info_res")
     if isinstance(video_info, dict):
         item_list = video_info.get("item_list") or video_info.get("itemList") or []
@@ -581,50 +548,62 @@ def _extract_video_url(item: dict[str, Any]) -> str:
 
 
 def _extract_image_urls(item: dict[str, Any]) -> list[str]:
-    """从 item JSON 中提取图集图片 URL 列表。优先返回无水印原图。"""
-    images: list[Any] = []
-    image_post_info = item.get("image_post_info") or item.get("imagePostInfo")
-    if isinstance(image_post_info, dict):
-        images.extend(image_post_info.get("images") or [])
+    """从 item JSON 中提取图集图片 URL 列表。优先返回无水印原图。
 
-    if isinstance(item.get("images"), list):
-        images.extend(item["images"])
-    if isinstance(item.get("image_infos"), list):
-        images.extend(item["image_infos"])
-    if isinstance(item.get("imageInfos"), list):
-        images.extend(item["imageInfos"])
+    策略：
+    1. 先检查 item.images（简单结构，URL 通常无防盗链，直接可用）
+    2. 再检查 item.image_post_info.images（复杂结构，需区分原图/展示图）
+    """
+    result: list[str] = []
 
+    # 策略 1：直接从 item.images 提取（Zhalslar 插件的方式）
+    # 这个路径的 URL 通常不需要 Referer，可以直接 fromURL 发送
     if isinstance(item.get("images"), list):
         for img in item["images"]:
             if isinstance(img, dict):
-                url_list = img.get("url_list") or img.get("urlList")
-                if isinstance(url_list, list) and url_list:
-                    images.append({"url_list": url_list})
+                # 优先 url_list / urlList
+                url_list = img.get("url_list") or img.get("urlList") or []
+                for url in url_list:
+                    if url and url not in result:
+                        result.append(_normalize_media_url(str(url)))
+            elif isinstance(img, str) and img not in result:
+                result.append(_normalize_media_url(img))
 
-    result: list[str] = []
-    for image_item in images:
-        url = ""
-        if isinstance(image_item, dict):
-            # 按优先级依次尝试：origin_image（无水印原图）> display_image > 其他
-            priority_keys = [
-                "origin_image", "originImage",
-                "display_image", "displayImage",
-                "image",
-                "url_list", "urlList",
-                "urls", "download_url_list",
-            ]
-            for key in priority_keys:
-                container = image_item.get(key)
-                if container:
-                    candidate = _choose_best_url(_urls_from_containers([container]))
-                    if candidate:
-                        url = candidate
-                        break
-        else:
-            url = _choose_best_url(_urls_from_containers([image_item]))
+    # 策略 2：从 image_post_info 提取（带 origin_image 优先）
+    if not result:
+        images: list[Any] = []
+        image_post_info = item.get("image_post_info") or item.get("imagePostInfo")
+        if isinstance(image_post_info, dict):
+            images.extend(image_post_info.get("images") or [])
 
-        if url and url not in result:
-            result.append(url)
+        if isinstance(item.get("image_infos"), list):
+            images.extend(item["image_infos"])
+        if isinstance(item.get("imageInfos"), list):
+            images.extend(item["imageInfos"])
+
+        for image_item in images:
+            url = ""
+            if isinstance(image_item, dict):
+                # 按优先级依次尝试：origin_image（无水印原图）> display_image > 其他
+                priority_keys = [
+                    "origin_image", "originImage",
+                    "display_image", "displayImage",
+                    "image",
+                    "url_list", "urlList",
+                    "urls", "download_url_list",
+                ]
+                for key in priority_keys:
+                    container = image_item.get(key)
+                    if container:
+                        candidate = _choose_best_url(_urls_from_containers([container]))
+                        if candidate:
+                            url = candidate
+                            break
+            else:
+                url = _choose_best_url(_urls_from_containers([image_item]))
+
+            if url and url not in result:
+                result.append(url)
 
     return result
 
