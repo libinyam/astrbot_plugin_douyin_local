@@ -83,18 +83,17 @@ class LocalDouyinPlugin(Star):
         if info:
             yield event.plain_result(info)
 
-        # 抖音 CDN 要求带 Referer 才能下载，统一用 _download_media_bytes 下载为 bytes
+        # 视频需要带 Referer 下载（抖音 CDN 会 403），用 base64 发送
+        # 图片通常不需要 Referer（item.images 的 URL 无防盗链），直接 fromURL
         download_referer = item.resolved_url or "https://www.iesdouyin.com/"
         timeout = _as_float(self.config.get("timeout_seconds", 20), 20)
 
         if item.is_video:
-            # 下载视频为 bytes，用 fromBase64 发送（避免跨容器文件路径问题）
             video_bytes = await _download_media_bytes(item.video_url, download_referer, timeout)
             if video_bytes:
                 b64 = base64.b64encode(video_bytes).decode()
                 yield event.chain_result([Comp.Video.fromBase64(b64)])
             else:
-                # 下载失败，回退到 URL 方式
                 yield event.chain_result([Comp.Video.fromURL(item.video_url)])
             return
 
@@ -105,44 +104,25 @@ class LocalDouyinPlugin(Star):
 
             images_to_send = image_urls[:max_images]
 
-            # 下载所有图片为 bytes（带 Referer）
-            downloaded = []  # [(is_bytes, bytes_or_url), ...]
-            for img_url in images_to_send:
-                img_bytes = await _download_media_bytes(img_url, download_referer, timeout)
-                if img_bytes:
-                    downloaded.append((True, img_bytes))
-                else:
-                    downloaded.append((False, img_url))
-
-            if len(downloaded) > forward_threshold:
+            if len(images_to_send) > forward_threshold:
                 # 超过阈值，用合并转发（聊天记录）形式发送
                 try:
-                    nodes = []
-                    for is_bytes, data in downloaded:
-                        if is_bytes:
-                            img_comp = Comp.Image.fromBytes(data)
-                        else:
-                            img_comp = Comp.Image.fromURL(data)
-                        nodes.append(Comp.Node(
-                            content=[img_comp],
+                    nodes = [
+                        Comp.Node(
+                            content=[Comp.Image.fromURL(url)],
                             uin="0",
                             name="抖音图集",
-                        ))
+                        )
+                        for url in images_to_send
+                    ]
                     yield event.chain_result([Comp.Nodes(nodes=nodes)])
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"合并转发发送失败，回退到逐张发送: {exc}")
-                    for is_bytes, data in downloaded:
-                        if is_bytes:
-                            yield event.chain_result([Comp.Image.fromBytes(data)])
-                        else:
-                            yield event.chain_result([Comp.Image.fromURL(data)])
+                    for url in images_to_send:
+                        yield event.chain_result([Comp.Image.fromURL(url)])
             else:
-                # 未超过阈值，逐张发送
-                for is_bytes, data in downloaded:
-                    if is_bytes:
-                        yield event.chain_result([Comp.Image.fromBytes(data)])
-                    else:
-                        yield event.chain_result([Comp.Image.fromURL(data)])
+                for url in images_to_send:
+                    yield event.chain_result([Comp.Image.fromURL(url)])
 
             if len(image_urls) > max_images:
                 yield event.plain_result(
@@ -184,7 +164,7 @@ async def _download_media_bytes(url: str, referer: str, timeout: float) -> bytes
     """下载抖音媒体文件为 bytes。
 
     抖音 CDN 要求带 Referer 头，否则返回 403。
-    用 bytes 方式传输避免跨容器文件路径问题。
+    用 base64 方式发送避免跨容器文件路径问题。
     """
     headers = {
         "User-Agent": (
@@ -205,5 +185,5 @@ async def _download_media_bytes(url: str, referer: str, timeout: float) -> bytes
             resp.raise_for_status()
             return resp.content
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"媒体下载失败，回退到 URL 方式: {exc}")
+        logger.warning(f"视频下载失败，回退到 URL 方式: {exc}")
         return None
