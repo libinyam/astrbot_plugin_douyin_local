@@ -41,7 +41,7 @@
     "default": 20
   },
   "douyin_cookie": {
-    "description": "可选：抖音网页 Cookie。默认留空；当公开接口要求登录态时再填写",
+    "description": "可选：抖音网页 Cookie（包含 ttwid 可提高解析成功率，留空则自动注册匿名 ttwid）",
     "hint": "请只填写你自己的 Cookie，不要共享给他人",
     "type": "string",
     "default": ""
