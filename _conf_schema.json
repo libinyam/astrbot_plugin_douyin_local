@@ -1,0 +1,49 @@
+{
+  "enable_id_whitelist": {
+    "description": "是否启用会话 ID 白名单（启用后仅白名单内的会话可触发解析）",
+    "type": "bool",
+    "default": false
+  },
+  "id_whitelist": {
+    "description": "会话 ID 白名单列表（unified_msg_origin 格式，可通过 /sid 命令获取）",
+    "hint": "例如 aiocqhttp:GroupMessage:123456789",
+    "type": "list",
+    "default": []
+  },
+  "whitelist_reply": {
+    "description": "非白名单会话触发时的回复内容（留空则静默忽略）",
+    "type": "string",
+    "default": ""
+  },
+  "group_whitelist": {
+    "description": "群白名单（群 ID 列表）。为空则所有群都生效",
+    "type": "list",
+    "default": []
+  },
+  "enable_in_private": {
+    "description": "是否在私聊中启用解析",
+    "type": "bool",
+    "default": true
+  },
+  "reply_on_failure": {
+    "description": "解析失败时是否回复失败原因",
+    "type": "bool",
+    "default": true
+  },
+  "max_images": {
+    "description": "图集最多发送图片数量",
+    "type": "int",
+    "default": 12
+  },
+  "timeout_seconds": {
+    "description": "请求抖音页面和接口的超时时间（秒）",
+    "type": "float",
+    "default": 20
+  },
+  "douyin_cookie": {
+    "description": "可选：抖音网页 Cookie。默认留空；当公开接口要求登录态时再填写",
+    "hint": "请只填写你自己的 Cookie，不要共享给他人",
+    "type": "string",
+    "default": ""
+  }
+}
