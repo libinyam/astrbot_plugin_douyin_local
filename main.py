@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
+import base64
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -85,19 +83,18 @@ class LocalDouyinPlugin(Star):
         if info:
             yield event.plain_result(info)
 
-        # 抖音 CDN 要求带 Referer 才能下载，统一用 _download_media 下载到本地
+        # 抖音 CDN 要求带 Referer 才能下载，统一用 _download_media_bytes 下载为 bytes
         download_referer = item.resolved_url or "https://www.iesdouyin.com/"
         timeout = _as_float(self.config.get("timeout_seconds", 20), 20)
 
         if item.is_video:
-            video_file = await _download_media(item.video_url, download_referer, timeout, ".mp4")
-            if video_file:
-                # File 组件参数: name=显示文件名, file=本地路径
-                yield event.chain_result([
-                    Comp.File(name="douyin_video.mp4", file=video_file)
-                ])
-                _safe_unlink(video_file)
+            # 下载视频为 bytes，用 fromBase64 发送（避免跨容器文件路径问题）
+            video_bytes = await _download_media_bytes(item.video_url, download_referer, timeout)
+            if video_bytes:
+                b64 = base64.b64encode(video_bytes).decode()
+                yield event.chain_result([Comp.Video.fromBase64(b64)])
             else:
+                # 下载失败，回退到 URL 方式
                 yield event.chain_result([Comp.Video.fromURL(item.video_url)])
             return
 
@@ -108,24 +105,24 @@ class LocalDouyinPlugin(Star):
 
             images_to_send = image_urls[:max_images]
 
-            # 先下载所有图片到本地（带 Referer）
-            downloaded_files = []
+            # 下载所有图片为 bytes（带 Referer）
+            downloaded = []  # [(is_bytes, bytes_or_url), ...]
             for img_url in images_to_send:
-                img_file = await _download_media(img_url, download_referer, timeout, ".jpg")
-                if img_file:
-                    downloaded_files.append((True, img_file))  # (is_local, path)
+                img_bytes = await _download_media_bytes(img_url, download_referer, timeout)
+                if img_bytes:
+                    downloaded.append((True, img_bytes))
                 else:
-                    downloaded_files.append((False, img_url))  # (is_local, url)
+                    downloaded.append((False, img_url))
 
-            if len(downloaded_files) > forward_threshold:
+            if len(downloaded) > forward_threshold:
                 # 超过阈值，用合并转发（聊天记录）形式发送
                 try:
                     nodes = []
-                    for is_local, path in downloaded_files:
-                        if is_local:
-                            img_comp = Comp.Image.fromFileSystem(path)
+                    for is_bytes, data in downloaded:
+                        if is_bytes:
+                            img_comp = Comp.Image.fromBytes(data)
                         else:
-                            img_comp = Comp.Image.fromURL(path)
+                            img_comp = Comp.Image.fromURL(data)
                         nodes.append(Comp.Node(
                             content=[img_comp],
                             uin="0",
@@ -134,23 +131,18 @@ class LocalDouyinPlugin(Star):
                     yield event.chain_result([Comp.Nodes(nodes=nodes)])
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"合并转发发送失败，回退到逐张发送: {exc}")
-                    for is_local, path in downloaded_files:
-                        if is_local:
-                            yield event.chain_result([Comp.Image.fromFileSystem(path)])
+                    for is_bytes, data in downloaded:
+                        if is_bytes:
+                            yield event.chain_result([Comp.Image.fromBytes(data)])
                         else:
-                            yield event.chain_result([Comp.Image.fromURL(path)])
+                            yield event.chain_result([Comp.Image.fromURL(data)])
             else:
                 # 未超过阈值，逐张发送
-                for is_local, path in downloaded_files:
-                    if is_local:
-                        yield event.chain_result([Comp.Image.fromFileSystem(path)])
+                for is_bytes, data in downloaded:
+                    if is_bytes:
+                        yield event.chain_result([Comp.Image.fromBytes(data)])
                     else:
-                        yield event.chain_result([Comp.Image.fromURL(path)])
-
-            # 清理临时文件
-            for is_local, path in downloaded_files:
-                if is_local:
-                    _safe_unlink(path)
+                        yield event.chain_result([Comp.Image.fromURL(data)])
 
             if len(image_urls) > max_images:
                 yield event.plain_result(
@@ -188,17 +180,11 @@ def _as_float(value, default: float) -> float:
         return default
 
 
-def _safe_unlink(path: str) -> None:
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
-
-
-async def _download_media(url: str, referer: str, timeout: float, ext: str) -> str | None:
-    """下载抖音媒体文件到临时文件，返回文件路径。
+async def _download_media_bytes(url: str, referer: str, timeout: float) -> bytes | None:
+    """下载抖音媒体文件为 bytes。
 
     抖音 CDN 要求带 Referer 头，否则返回 403。
+    用 bytes 方式传输避免跨容器文件路径问题。
     """
     headers = {
         "User-Agent": (
@@ -217,29 +203,7 @@ async def _download_media(url: str, referer: str, timeout: float, ext: str) -> s
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
-
-            # 根据 Content-Type 确定扩展名
-            content_type = resp.headers.get("content-type", "")
-            if "image/webp" in content_type:
-                ext = ".webp"
-            elif "image/png" in content_type:
-                ext = ".png"
-            elif "image/jpeg" in content_type or "image/jpg" in content_type:
-                ext = ".jpg"
-            elif "video/mp4" in content_type:
-                ext = ".mp4"
-
-            tmp_dir = Path(tempfile.gettempdir()) / "astrbot_douyin"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            tmp_file = tmp_dir / f"{_safe_filename(url)}{ext}"
-            tmp_file.write_bytes(resp.content)
-            return str(tmp_file)
+            return resp.content
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"媒体下载失败，回退到 URL 方式: {exc}")
         return None
-
-
-def _safe_filename(url: str) -> str:
-    """从 URL 生成一个安全的文件名。"""
-    import hashlib
-    return hashlib.md5(url.encode()).hexdigest()[:16]
