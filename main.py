@@ -85,15 +85,16 @@ class LocalDouyinPlugin(Star):
         if info:
             yield event.plain_result(info)
 
-        # 抖音 CDN 要求带 Referer 才能下载，所以统一用 _download_media 下载
+        # 抖音 CDN 要求带 Referer 才能下载，统一用 _download_media 下载到本地
         download_referer = item.resolved_url or "https://www.iesdouyin.com/"
         timeout = _as_float(self.config.get("timeout_seconds", 20), 20)
 
         if item.is_video:
             video_file = await _download_media(item.video_url, download_referer, timeout, ".mp4")
             if video_file:
+                # File 组件参数: name=显示文件名, file=本地路径
                 yield event.chain_result([
-                    Comp.File(name="douyin_video.mp4", file_=video_file)
+                    Comp.File(name="douyin_video.mp4", file=video_file)
                 ])
                 _safe_unlink(video_file)
             else:
@@ -107,53 +108,49 @@ class LocalDouyinPlugin(Star):
 
             images_to_send = image_urls[:max_images]
 
-            # 先下载所有图片到本地
+            # 先下载所有图片到本地（带 Referer）
             downloaded_files = []
             for img_url in images_to_send:
                 img_file = await _download_media(img_url, download_referer, timeout, ".jpg")
                 if img_file:
-                    downloaded_files.append(img_file)
+                    downloaded_files.append((True, img_file))  # (is_local, path)
                 else:
-                    # 下载失败，回退到 URL
-                    downloaded_files.append(img_url)
+                    downloaded_files.append((False, img_url))  # (is_local, url)
 
             if len(downloaded_files) > forward_threshold:
                 # 超过阈值，用合并转发（聊天记录）形式发送
                 try:
                     nodes = []
-                    for f in downloaded_files:
-                        if isinstance(f, str) and f.startswith("/"):
-                            nodes.append(Comp.Node(
-                                content=[Comp.Image.fromFile(f)],
-                                uin="0",
-                                name="抖音图集",
-                            ))
+                    for is_local, path in downloaded_files:
+                        if is_local:
+                            img_comp = Comp.Image.fromFileSystem(path)
                         else:
-                            nodes.append(Comp.Node(
-                                content=[Comp.Image.fromURL(f)],
-                                uin="0",
-                                name="抖音图集",
-                            ))
+                            img_comp = Comp.Image.fromURL(path)
+                        nodes.append(Comp.Node(
+                            content=[img_comp],
+                            uin="0",
+                            name="抖音图集",
+                        ))
                     yield event.chain_result([Comp.Nodes(nodes=nodes)])
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"合并转发发送失败，回退到逐张发送: {exc}")
-                    for f in downloaded_files:
-                        if isinstance(f, str) and f.startswith("/"):
-                            yield event.chain_result([Comp.Image.fromFile(f)])
+                    for is_local, path in downloaded_files:
+                        if is_local:
+                            yield event.chain_result([Comp.Image.fromFileSystem(path)])
                         else:
-                            yield event.chain_result([Comp.Image.fromURL(f)])
+                            yield event.chain_result([Comp.Image.fromURL(path)])
             else:
                 # 未超过阈值，逐张发送
-                for f in downloaded_files:
-                    if isinstance(f, str) and f.startswith("/"):
-                        yield event.chain_result([Comp.Image.fromFile(f)])
+                for is_local, path in downloaded_files:
+                    if is_local:
+                        yield event.chain_result([Comp.Image.fromFileSystem(path)])
                     else:
-                        yield event.chain_result([Comp.Image.fromURL(f)])
+                        yield event.chain_result([Comp.Image.fromURL(path)])
 
             # 清理临时文件
-            for f in downloaded_files:
-                if isinstance(f, str) and f.startswith("/"):
-                    _safe_unlink(f)
+            for is_local, path in downloaded_files:
+                if is_local:
+                    _safe_unlink(path)
 
             if len(image_urls) > max_images:
                 yield event.plain_result(
