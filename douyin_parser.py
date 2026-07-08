@@ -132,6 +132,23 @@ class DouyinParser:
                 raise DouyinParseError("已打开链接，但没有找到作品 ID")
 
             errors: list[str] = []
+            page_candidates = list(self._page_candidates(item_id))
+            for source, page_url, page_headers in page_candidates:
+                try:
+                    resp = await self._get(client, page_url, headers=page_headers)
+                    item = self._extract_item_from_page(resp.text or "", item_id)
+                    if item:
+                        return self._normalize_item(
+                            item,
+                            source_url=source_url,
+                            resolved_url=str(resp.url),
+                            item_id=item_id,
+                            api_source=source,
+                        )
+                    errors.append(f"{source}: 没有媒体数据")
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{source}: {exc}")
+
             for source, endpoint, params in self._api_candidates(item_id):
                 try:
                     resp = await self._get(
@@ -213,6 +230,28 @@ class DouyinParser:
                 "device_platform": "webapp",
             },
         )
+
+    def _page_candidates(self, item_id: str) -> Iterable[tuple[str, str, dict[str, str]]]:
+        mobile_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://www.douyin.com/",
+        }
+        for kind in ("video", "note"):
+            yield (
+                f"iesdouyin-share-{kind}",
+                f"https://www.iesdouyin.com/share/{kind}/{item_id}/",
+                mobile_headers,
+            )
+            yield (
+                f"m-douyin-share-{kind}",
+                f"https://m.douyin.com/share/{kind}/{item_id}",
+                mobile_headers,
+            )
 
     async def _try_discover_page(
         self,
@@ -445,11 +484,8 @@ def _extract_video_url(item: dict[str, Any]) -> str:
         if isinstance(bit_rate, dict):
             containers.append(bit_rate.get("play_addr") or bit_rate.get("playAddr"))
 
-    for key, value in video.items():
-        if key not in preferred_keys and isinstance(value, (dict, list, str)):
-            containers.append(value)
-
-    return _choose_best_url(_urls_from_containers(containers))
+    urls = [url for url in _urls_from_containers(containers) if _looks_like_video_url(url)]
+    return _prefer_non_watermark_video(_choose_best_url(urls))
 
 
 def _extract_image_urls(item: dict[str, Any]) -> list[str]:
@@ -565,3 +601,20 @@ def _choose_best_url(urls: Iterable[str]) -> str:
         )
 
     return sorted(unique, key=score, reverse=True)[0]
+
+
+def _looks_like_video_url(url: str) -> bool:
+    lower = url.lower()
+    if any(marker in lower for marker in ("/aweme/v1/play", "/aweme/v1/playwm", "douyinvod.com")):
+        return True
+    if any(ext in lower for ext in (".mp4", ".mov", ".m3u8")):
+        return True
+    if any(ext in lower for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic")):
+        return False
+    return "video_id=" in lower or "mime_type=video" in lower
+
+
+def _prefer_non_watermark_video(url: str) -> str:
+    if not url:
+        return ""
+    return url.replace("/playwm/", "/play/")

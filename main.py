@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover - AstrBot loaders differ between version
     "astrbot_plugin_douyin_local",
     "codex",
     "自动解析公开抖音视频/图集链接，不依赖第三方解析站",
-    "0.1.1",
+    "0.1.2",
 )
 class LocalDouyinPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):

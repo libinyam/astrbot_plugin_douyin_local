@@ -63,6 +63,39 @@ class DouyinParserTests(unittest.TestCase):
         self.assertEqual(result.title, "测试标题")
         self.assertEqual(result.video_url, "https://example.com/video.mp4?x=1&y=2")
 
+    def test_video_extraction_prefers_play_addr_over_cover(self):
+        parser = DouyinParser()
+        item = {
+            "aweme_id": ITEM_ID,
+            "desc": "视频",
+            "author": {"nickname": "作者"},
+            "video": {
+                "play_addr": {
+                    "url_list": [
+                        "https://aweme.snssdk.com/aweme/v1/playwm/?video_id=v123&ratio=720p"
+                    ]
+                },
+                "cover": {
+                    "url_list": [
+                        "https://p3-sign.douyinpic.com/some/really/long/cover/path/image.webp?x=1&y=2&z=3"
+                    ]
+                },
+            },
+        }
+        result = parser._normalize_item(item, "https://v.douyin.com/a/", "", ITEM_ID, "test")
+
+        self.assertTrue(result.is_video)
+        self.assertIn("/aweme/v1/play/", result.video_url)
+        self.assertNotIn("douyinpic.com", result.video_url)
+
+    def test_page_candidates_include_mobile_share_pages(self):
+        parser = DouyinParser()
+        candidates = list(parser._page_candidates(ITEM_ID))
+        urls = [url for _, url, _ in candidates]
+
+        self.assertIn(f"https://www.iesdouyin.com/share/video/{ITEM_ID}/", urls)
+        self.assertIn(f"https://m.douyin.com/share/note/{ITEM_ID}", urls)
+
     def test_extract_video_from_universal_rehydration_data(self):
         parser = DouyinParser()
         payload = {
