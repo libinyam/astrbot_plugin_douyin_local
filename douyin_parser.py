@@ -581,7 +581,7 @@ def _extract_video_url(item: dict[str, Any]) -> str:
 
 
 def _extract_image_urls(item: dict[str, Any]) -> list[str]:
-    """从 item JSON 中提取图集图片 URL 列表。"""
+    """从 item JSON 中提取图集图片 URL 列表。优先返回无水印原图。"""
     images: list[Any] = []
     image_post_info = item.get("image_post_info") or item.get("imagePostInfo")
     if isinstance(image_post_info, dict):
@@ -604,19 +604,26 @@ def _extract_image_urls(item: dict[str, Any]) -> list[str]:
 
     result: list[str] = []
     for image_item in images:
-        containers = []
+        url = ""
         if isinstance(image_item, dict):
-            for key in (
-                "display_image", "displayImage",
-                "origin_image", "originImage",
-                "image", "url_list", "urlList",
+            # 按优先级依次尝试：origin_image（无水印原图）> display_image > 其他
+            priority_keys = [
+                "origin_image", "originImage",      # 优先：无水印原图
+                "display_image", "displayImage",     # 其次：展示图（可能有水印）
+                "image",                             # 通用
+                "url_list", "urlList",              # 直接 URL 列表
                 "urls", "download_url_list",
-            ):
-                containers.append(image_item.get(key))
+            ]
+            for key in priority_keys:
+                container = image_item.get(key)
+                if container:
+                    candidate = _choose_best_url(_urls_from_containers([container]))
+                    if candidate:
+                        url = candidate
+                        break
         else:
-            containers.append(image_item)
+            url = _choose_best_url(_urls_from_containers([image_item]))
 
-        url = _choose_best_url(_urls_from_containers(containers))
         if url and url not in result:
             result.append(url)
 
@@ -677,7 +684,7 @@ def _choose_best_url(urls: Iterable[str]) -> str:
         lower = url.lower()
         return (
             1 if lower.startswith("https://") else 0,
-            # 优先无水印：不含 watermark 和 playwm 的链接得分更高
+            # 优先无水印：不含 watermark、playwm 的链接得分更高
             1 if "watermark" not in lower and "playwm" not in lower else 0,
             len(url),
         )
