@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import tempfile
+from pathlib import Path
+
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
@@ -10,12 +14,14 @@ try:
 except ImportError:  # pragma: no cover - AstrBot loaders differ between versions.
     from douyin_parser import DouyinParseError, DouyinParser, extract_douyin_url
 
+import httpx
+
 
 @register(
     "astrbot_plugin_douyin_local",
-    "codex",
+    "libinyam",
     "自动解析公开抖音视频/图集链接，不依赖第三方解析站",
-    "0.1.1",
+    "v0.2.0",
 )
 class LocalDouyinPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -80,7 +86,22 @@ class LocalDouyinPlugin(Star):
             yield event.plain_result(info)
 
         if item.is_video:
-            yield event.chain_result([Comp.Video.fromURL(item.video_url)])
+            # 抖音视频链接需要带 Referer 才能下载，先下载到临时文件再发送
+            video_file = await _download_video(
+                item.video_url,
+                item.resolved_url,
+                _as_float(self.config.get("timeout_seconds", 20), 20),
+            )
+            if video_file:
+                yield event.chain_result([Comp.File(video_file, "douyin_video.mp4")])
+                # 延迟清理临时文件
+                try:
+                    os.unlink(video_file)
+                except OSError:
+                    pass
+            else:
+                # 下载失败，回退到 URL 方式
+                yield event.chain_result([Comp.Video.fromURL(item.video_url)])
             return
 
         if item.is_images:
@@ -122,3 +143,43 @@ def _as_float(value, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+async def _download_video(video_url: str, referer: str, timeout: float) -> str | None:
+    """下载抖音视频到临时文件，返回文件路径。
+
+    抖音 CDN 要求带 Referer 头，否则返回 403。
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            "Version/16.6 Mobile/15E148 Safari/604.1"
+        ),
+        "Referer": referer or "https://www.iesdouyin.com/",
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(timeout),
+            headers=headers,
+        ) as client:
+            resp = await client.get(video_url)
+            resp.raise_for_status()
+
+            # 写入临时文件
+            tmp_dir = Path(tempfile.gettempdir()) / "astrbot_douyin"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp_file = tmp_dir / f"{_safe_filename(video_url)}.mp4"
+            tmp_file.write_bytes(resp.content)
+            return str(tmp_file)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"视频下载失败，回退到 URL 方式: {exc}")
+        return None
+
+
+def _safe_filename(url: str) -> str:
+    """从 URL 生成一个安全的文件名。"""
+    import hashlib
+    return hashlib.md5(url.encode()).hexdigest()[:16]
