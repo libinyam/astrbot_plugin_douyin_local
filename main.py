@@ -107,8 +107,32 @@ class LocalDouyinPlugin(Star):
         if item.is_images:
             image_urls = item.image_urls or []
             max_images = max(1, _as_int(self.config.get("max_images", 12), 12))
-            for image_url in image_urls[:max_images]:
-                yield event.chain_result([Comp.Image.fromURL(image_url)])
+            forward_threshold = max(1, _as_int(self.config.get("forward_threshold", 3), 3))
+
+            images_to_send = image_urls[:max_images]
+
+            if len(images_to_send) > forward_threshold:
+                # 超过阈值，用合并转发（聊天记录）形式发送
+                try:
+                    nodes = [
+                        Comp.Node(
+                            content=[Comp.Image.fromURL(url)],
+                            uin="0",
+                            name="抖音图集",
+                        )
+                        for url in images_to_send
+                    ]
+                    yield event.chain_result([Comp.Nodes(nodes=nodes)])
+                except Exception as exc:  # noqa: BLE001
+                    # 合并转发失败（可能不支持），回退到逐张发送
+                    logger.warning(f"合并转发发送失败，回退到逐张发送: {exc}")
+                    for url in images_to_send:
+                        yield event.chain_result([Comp.Image.fromURL(url)])
+            else:
+                # 未超过阈值，逐张发送
+                for url in images_to_send:
+                    yield event.chain_result([Comp.Image.fromURL(url)])
+
             if len(image_urls) > max_images:
                 yield event.plain_result(
                     f"图集共有 {len(image_urls)} 张，已按配置发送前 {max_images} 张。"

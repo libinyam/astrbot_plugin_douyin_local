@@ -35,6 +35,11 @@
     "type": "int",
     "default": 12
   },
+  "forward_threshold": {
+    "description": "图片数量超过此值时，使用合并转发（聊天记录）形式发送（仅 QQ 平台支持）",
+    "type": "int",
+    "default": 3
+  },
   "timeout_seconds": {
     "description": "请求抖音页面和接口的超时时间（秒）",
     "type": "float",
