@@ -2,16 +2,17 @@
 
 AstrBot 抖音公开链接解析插件。它会自动识别聊天消息里的抖音链接，尝试解析视频或图集并发送到当前会话。
 
-这个版本不调用第三方解析站，不会把链接转发给 `toody.netlify.app` 一类的外部解析 API。它会直接访问抖音公开分享页和公开 Web 接口，因此稳定性取决于抖音网页结构和风控策略。
+这个版本不调用第三方解析站，不依赖 `a_bogus` / `X-Bogus` 签名。它通过 iesdouyin 移动端分享页 + `window._ROUTER_DATA` 提取作品数据，仅需一个可免费注册的匿名 `ttwid` cookie。
 
 ## 功能
 
-- 自动识别 `v.douyin.com`、`www.douyin.com`、`m.douyin.com`、`iesdouyin.com` 链接
+- 自动识别 `v.douyin.com`、`jx.douyin.com`、`www.douyin.com`、`m.douyin.com`、`iesdouyin.com` 链接
 - 自动展开短链并提取作品 ID
 - 支持视频作品和图集作品
+- 自动注册匿名 `ttwid`，无需手动配置 Cookie
+- 视频下载带正确 `Referer` 头，避免 403
 - 支持群白名单、会话 ID 白名单、私聊开关
 - 可配置失败时是否回复、图集最多发送数量、请求超时
-- 可选填写自己的抖音网页 Cookie，提高公开页面解析成功率
 
 ## 安装
 
@@ -57,7 +58,19 @@ https://v.douyin.com/xxxxxxx/
 - `group_whitelist`: 建议先填测试群 ID，确认稳定后再扩大范围。
 - `reply_on_failure`: 群里不想刷屏时可以关闭。
 - `max_images`: 图集较大时建议限制在 9 到 12 张。
-- `douyin_cookie`: 默认留空。只有在公开页面解析经常失败时，再填你自己的浏览器 Cookie。
+- `douyin_cookie`: 默认留空，插件会自动注册匿名 `ttwid`。只有在解析经常失败时，再填你自己的浏览器 Cookie（需包含 `ttwid`）。
+
+## 解析原理
+
+1. 从消息中提取抖音短链
+2. 请求短链（不跟随重定向），从 `Location` 头提取作品 ID
+3. 请求 `iesdouyin.com/share/video/{id}/` 分享页（移动端 UA + ttwid）
+4. 从页面 HTML 中提取 `window._ROUTER_DATA` JSON
+5. 从 `loaderData` -> `videoInfoRes.item_list[0]` 中提取视频/图集数据
+6. 视频通过 `aweme.snssdk.com/aweme/v1/play/` 端点获取无水印直链
+7. 图集通过 iesdouyin v2 slidesinfo 接口获取图片
+
+此方案不需要 `a_bogus` 签名，稳定性取决于抖音移动端分享页结构。
 
 ## 注意
 
