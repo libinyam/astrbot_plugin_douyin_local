@@ -93,7 +93,10 @@ class LocalDouyinPlugin(Star):
                 _as_float(self.config.get("timeout_seconds", 20), 20),
             )
             if video_file:
-                yield event.chain_result([Comp.File(video_file, "douyin_video.mp4")])
+                # Comp.File 参数顺序：name=显示文件名, file_=实际文件路径
+                yield event.chain_result([
+                    Comp.File(name="douyin_video.mp4", file_=video_file)
+                ])
                 # 延迟清理临时文件
                 try:
                     os.unlink(video_file)
