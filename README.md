@@ -65,6 +65,17 @@ https://v.douyin.com/xxxxxxx/
 
 请在遵守平台规则、版权要求和所在地法律法规的前提下使用本插件。插件仅提供公开分享链接的解析辅助，不鼓励未授权下载、传播或商用他人内容。
 
+## 更新
+
+手动安装的用户可以进入插件目录更新：
+
+```bash
+cd data/plugins/astrbot_plugin_douyin_local
+git pull
+```
+
+更新后在 AstrBot WebUI 中重载插件或重启 AstrBot。
+
 ## 开源协议
 
 MIT License

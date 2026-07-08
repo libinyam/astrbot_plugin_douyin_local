@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin
 
 import httpx
 
@@ -33,6 +33,10 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
     "Referer": "https://www.douyin.com/",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 
@@ -136,7 +140,7 @@ class DouyinParser:
                         params=params,
                         headers={"Referer": resolved_url},
                     )
-                    data = resp.json()
+                    data = _json_from_response(resp)
                     item = self._extract_item_from_json(data, item_id)
                     if item:
                         return self._normalize_item(
@@ -200,6 +204,15 @@ class DouyinParser:
                 "version_code": "170400",
             },
         )
+        yield (
+            "douyin-light-aweme-detail",
+            "https://www.douyin.com/aweme/v1/web/aweme/detail/",
+            {
+                "aweme_id": item_id,
+                "aid": "6383",
+                "device_platform": "webapp",
+            },
+        )
 
     async def _try_discover_page(
         self,
@@ -254,6 +267,7 @@ class DouyinParser:
             item.get("item_title"),
             _get_path(item, "share_info.share_title"),
             _get_path(item, "shareInfo.shareTitle"),
+            _get_path(item, "seo_info.ocr_content"),
         )
         author = _first_text(
             _get_path(item, "author.nickname"),
@@ -297,18 +311,22 @@ def _extract_json_blobs(page_text: str) -> Iterable[Any]:
 
     script_patterns = [
         re.compile(
-            r"<script[^>]+id=[\"'](?:RENDER_DATA|SSR_RENDER_DATA)[\"'][^>]*>(.*?)</script>",
+            r"<script[^>]+id=[\"'](?:RENDER_DATA|SSR_RENDER_DATA|__UNIVERSAL_DATA_FOR_REHYDRATION__)[\"'][^>]*>(.*?)</script>",
             re.IGNORECASE | re.DOTALL,
         ),
         re.compile(
             r"window\.(?:_ROUTER_DATA|__INITIAL_STATE__)\s*=\s*(\{.*?\})\s*;?\s*</script>",
             re.IGNORECASE | re.DOTALL,
         ),
+        re.compile(
+            r"window\.(?:_ROUTER_DATA|__INITIAL_STATE__)\s*=\s*JSON\.parse\((['\"])(.*?)\1\)",
+            re.IGNORECASE | re.DOTALL,
+        ),
     ]
 
     for pattern in script_patterns:
         for match in pattern.finditer(page_text):
-            raw = match.group(1).strip()
+            raw = match.group(2 if len(match.groups()) >= 2 and match.group(2) else 1).strip()
             for candidate in _json_decode_candidates(raw):
                 yield candidate
 
@@ -319,6 +337,8 @@ def _json_decode_candidates(raw: str) -> Iterable[Any]:
         html.unescape(raw),
         unquote(raw),
         unquote(html.unescape(raw)),
+        _decode_js_string(raw),
+        _decode_js_string(html.unescape(raw)),
     ]
     seen: set[str] = set()
     for candidate in candidates:
@@ -330,6 +350,13 @@ def _json_decode_candidates(raw: str) -> Iterable[Any]:
             yield json.loads(text)
         except json.JSONDecodeError:
             continue
+
+
+def _decode_js_string(value: str) -> str:
+    try:
+        return json.loads(f'"{value}"')
+    except json.JSONDecodeError:
+        return value
 
 
 def _iter_dicts(value: Any) -> Iterable[dict[str, Any]]:
@@ -344,7 +371,7 @@ def _iter_dicts(value: Any) -> Iterable[dict[str, Any]]:
 
 
 def _dict_id(item: dict[str, Any]) -> str:
-    for key in ("aweme_id", "awemeId", "item_id", "itemId", "id"):
+    for key in ("aweme_id", "awemeId", "item_id", "itemId", "id", "id_str", "group_id", "groupId"):
         value = item.get(key)
         if value is not None and re.fullmatch(r"\d{10,25}", str(value)):
             return str(value)
@@ -353,7 +380,17 @@ def _dict_id(item: dict[str, Any]) -> str:
 
 def _looks_like_media_item(item: dict[str, Any]) -> bool:
     has_title_or_author = any(
-        key in item for key in ("desc", "caption", "author", "share_info", "shareInfo")
+        key in item
+        for key in (
+            "desc",
+            "caption",
+            "author",
+            "authorInfo",
+            "share_info",
+            "shareInfo",
+            "video",
+            "videoInfo",
+        )
     )
     return has_title_or_author and (
         isinstance(item.get("video"), dict)
@@ -384,7 +421,7 @@ def _get_path(value: dict[str, Any], dotted_path: str) -> Any:
 
 
 def _extract_video_url(item: dict[str, Any]) -> str:
-    video = item.get("video") or item.get("videoInfo")
+    video = item.get("video") or item.get("videoInfo") or item.get("video_data")
     if not isinstance(video, dict):
         return ""
 
@@ -396,6 +433,10 @@ def _extract_video_url(item: dict[str, Any]) -> str:
         "playAddrH264",
         "download_addr",
         "downloadAddr",
+        "play_api",
+        "playApi",
+        "h264_play_addr",
+        "h264PlayAddr",
     ]
     for key in preferred_keys:
         containers.append(video.get(key))
@@ -405,7 +446,7 @@ def _extract_video_url(item: dict[str, Any]) -> str:
             containers.append(bit_rate.get("play_addr") or bit_rate.get("playAddr"))
 
     for key, value in video.items():
-        if key not in preferred_keys and isinstance(value, dict):
+        if key not in preferred_keys and isinstance(value, (dict, list, str)):
             containers.append(value)
 
     return _choose_best_url(_urls_from_containers(containers))
@@ -420,6 +461,8 @@ def _extract_image_urls(item: dict[str, Any]) -> list[str]:
         images.extend(item["images"])
     if isinstance(item.get("image_infos"), list):
         images.extend(item["image_infos"])
+    if isinstance(item.get("imageInfos"), list):
+        images.extend(item["imageInfos"])
 
     result: list[str] = []
     for image_item in images:
@@ -433,6 +476,8 @@ def _extract_image_urls(item: dict[str, Any]) -> list[str]:
                 "image",
                 "url_list",
                 "urlList",
+                "urls",
+                "download_url_list",
             ):
                 containers.append(image_item.get(key))
         else:
@@ -446,7 +491,7 @@ def _extract_image_urls(item: dict[str, Any]) -> list[str]:
 
 
 def _extract_cover_url(item: dict[str, Any]) -> str:
-    video = item.get("video") or item.get("videoInfo")
+    video = item.get("video") or item.get("videoInfo") or item.get("video_data")
     containers: list[Any] = []
     if isinstance(video, dict):
         for key in ("cover", "origin_cover", "originCover", "dynamic_cover", "dynamicCover"):
@@ -481,7 +526,26 @@ def _normalize_media_url(url: str) -> str:
     text = html.unescape(url).replace("\\u0026", "&").strip()
     if text.startswith("//"):
         text = "https:" + text
+    if text.startswith("/"):
+        text = urljoin("https://www.douyin.com", text)
     return text
+
+
+def _json_from_response(resp: httpx.Response) -> Any:
+    text = resp.text.strip()
+    if not text:
+        raise DouyinParseError(f"接口返回空内容，HTTP {resp.status_code}")
+
+    try:
+        return resp.json()
+    except json.JSONDecodeError as exc:
+        content_type = resp.headers.get("content-type", "unknown")
+        snippet = re.sub(r"\s+", " ", text[:120])
+        if "<html" in text[:300].lower() or "<!doctype" in text[:300].lower():
+            snippet = "HTML 页面，可能被风控或接口已变更"
+        raise DouyinParseError(
+            f"接口未返回 JSON，HTTP {resp.status_code}, Content-Type: {content_type}, {snippet}"
+        ) from exc
 
 
 def _choose_best_url(urls: Iterable[str]) -> str:

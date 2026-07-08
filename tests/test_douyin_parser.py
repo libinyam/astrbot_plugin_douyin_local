@@ -2,7 +2,15 @@ import json
 import unittest
 from urllib.parse import quote
 
-from douyin_parser import DouyinParser, extract_aweme_id, extract_douyin_url
+import httpx
+
+from douyin_parser import (
+    DouyinParseError,
+    DouyinParser,
+    _json_from_response,
+    extract_aweme_id,
+    extract_douyin_url,
+)
 
 
 ITEM_ID = "7123456789012345678"
@@ -55,6 +63,38 @@ class DouyinParserTests(unittest.TestCase):
         self.assertEqual(result.title, "测试标题")
         self.assertEqual(result.video_url, "https://example.com/video.mp4?x=1&y=2")
 
+    def test_extract_video_from_universal_rehydration_data(self):
+        parser = DouyinParser()
+        payload = {
+            "__DEFAULT_SCOPE__": {
+                "webapp.video-detail": {
+                    "itemInfo": {
+                        "itemStruct": {
+                            "awemeId": ITEM_ID,
+                            "desc": "新版页面标题",
+                            "author": {"nickname": "新版作者"},
+                            "video": {
+                                "playAddr": {
+                                    "urlList": ["https://example.com/universal.mp4"]
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+        page = (
+            '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+            f"{json.dumps(payload, ensure_ascii=False)}"
+            "</script>"
+        )
+        item = parser._extract_item_from_page(page, ITEM_ID)
+        result = parser._normalize_item(item, "https://v.douyin.com/a/", "", ITEM_ID, "test")
+
+        self.assertTrue(result.is_video)
+        self.assertEqual(result.author, "新版作者")
+        self.assertEqual(result.video_url, "https://example.com/universal.mp4")
+
     def test_extract_images_from_item(self):
         parser = DouyinParser()
         item = {
@@ -72,6 +112,20 @@ class DouyinParserTests(unittest.TestCase):
 
         self.assertTrue(result.is_images)
         self.assertEqual(result.image_urls, ["https://example.com/1.jpg", "https://example.com/2.jpg"])
+
+    def test_non_json_api_response_has_readable_error(self):
+        response = httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text="<!doctype html><html><title>blocked</title></html>",
+            request=httpx.Request("GET", "https://www.douyin.com/api"),
+        )
+
+        with self.assertRaises(DouyinParseError) as ctx:
+            _json_from_response(response)
+
+        self.assertIn("接口未返回 JSON", str(ctx.exception))
+        self.assertIn("HTML 页面", str(ctx.exception))
 
 
 if __name__ == "__main__":
