@@ -1,6 +1,6 @@
 name: astrbot_plugin_douyin_local
 display_name: 抖音本地解析
 desc: 自动检测公开抖音分享链接，解析并发送视频或图集，不依赖第三方解析站
-version: v0.2.0
+version: v0.2.1
 author: libinyam
 repo: https://github.com/libinyam/astrbot_plugin_douyin_local

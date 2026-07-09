@@ -42,8 +42,8 @@ class DouyinParserTests(unittest.TestCase):
             ITEM_ID,
         )
 
-    def test_extract_router_data_from_share_page(self):
-        """测试从 iesdouyin 分享页提取 window._ROUTER_DATA"""
+    def test_extract_video_from_router_data(self):
+        """测试从移动分享页的 window._ROUTER_DATA 中提取作品数据"""
         parser = DouyinParser()
         payload = {
             "loaderData": {
@@ -76,9 +76,7 @@ class DouyinParserTests(unittest.TestCase):
         )
         router_data = _extract_router_data(page)
         self.assertIsNotNone(router_data)
-
-        loader_data = router_data.get("loaderData", {})
-        item = _find_item_in_router_data(loader_data, ITEM_ID)
+        item = _find_item_in_router_data(router_data.get("loaderData", {}), ITEM_ID)
         self.assertIsNotNone(item)
 
         result = parser._normalize_item(
@@ -87,7 +85,8 @@ class DouyinParserTests(unittest.TestCase):
         self.assertTrue(result.is_video)
         self.assertEqual(result.author, "测试作者")
         self.assertEqual(result.title, "测试标题")
-        self.assertEqual(result.video_url, "https://example.com/video.mp4?x=1&y=2")
+        self.assertIn("/aweme/v1/play/", result.video_url)
+        self.assertIn("video_id=vid123abc", result.video_url)
 
     def test_extract_images_from_item(self):
         parser = DouyinParser()

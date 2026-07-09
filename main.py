@@ -19,7 +19,7 @@ import httpx
     "astrbot_plugin_douyin_local",
     "libinyam",
     "自动解析公开抖音视频/图集链接，不依赖第三方解析站",
-    "v0.2.0",
+    "v0.2.1",
 )
 class LocalDouyinPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -48,11 +48,13 @@ class LocalDouyinPlugin(Star):
 
         return None
 
-    @filter.event_message_type(filter.EventMessageType.ALL, priority=-1)
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=10)
     async def on_message(self, event: AstrMessageEvent):
         url = extract_douyin_url(event.message_str)
         if not url:
             return
+
+        event.stop_event()
 
         denied = self._check_permission(event)
         if denied is not None:
